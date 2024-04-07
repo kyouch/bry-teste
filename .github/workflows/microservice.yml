@@ -1,12 +1,11 @@
 name: Helm = Simple Microservice
 
 on:
-  workflow_run:
-    push:
-      paths:
-        - microservice/**
-      branches:
-        - main
+  push:
+    paths:
+      - microservice/**
+    branches:
+      - main
 
 jobs:
   deploy:
