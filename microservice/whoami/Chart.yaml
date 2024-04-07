@@ -1,0 +1,8 @@
+apiVersion: v2
+name: whoami
+description: A Helm chart for whoami BRy-teste
+type: application
+version: 0.0.1
+maintainers:
+  - name: Yann Silva
+    email: yann.alverca@gmail.com

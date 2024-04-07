@@ -1,0 +1,31 @@
+name: Helm = Simple Microservice
+
+on:
+  workflow_run:
+    workflows: ["Terraform + Ansible = Kubernetes Cluster on AWS EC2"]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./microservice/whoami
+    steps:
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Helm Deploy
+      uses: WyriHaximus/github-action-helm3@v3
+      with:
+        exec: helm upgrade whoami --install --wait --atomic .
+        kubeconfig: '${{ secrets.KUBECONFIG }}'
+        overrule_existing_kubeconfig: "true"

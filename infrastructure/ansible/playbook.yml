@@ -1,0 +1,197 @@
+---
+- name: All Nodes
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Wait for SSH Connection
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 60
+
+    - name: Set Hostname
+      ansible.builtin.hostname:
+        name: "{{ instance_hostname }}"
+
+    - name: Add IP to /etc/hosts in all nodes
+      loop: "{{ groups['all'] }}"
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item]['ansible_host'] }} {{ hostvars[item]['inventory_hostname'] }}"
+        state: present
+
+    - name: Disable Swap
+      ansible.builtin.command: swapoff -a
+
+    - name: Configure modules for Containerd
+      ansible.builtin.shell: |
+        cat <<EOF | sudo tee /etc/modules-load.d/containerd.conf
+        overlay
+        br_netfilter
+        EOF
+
+    - name: Load Containerd overlay module
+      community.general.modprobe:
+        name: overlay
+        state: present
+
+    - name: Load Containerd br_netfilter module
+      community.general.modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Sysctl parameters for Kubernetes
+      ansible.builtin.shell: |
+        cat <<EOF | sudo tee /etc/sysctl.d/kubernetes.conf
+        net.bridge.bridge-nf-call-iptables = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.ipv4.ip_forward = 1
+        EOF
+
+    - name: Apply sysctl parameters
+      ansible.builtin.shell: sysctl --system
+
+    - name: Create Containerd config
+      ansible.builtin.shell: |
+        mkdir -p /etc/containerd
+        touch /etc/containerd/config.toml
+
+    - name: Install Containerd prerequisites
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - lsb-release
+          - curl
+          - gnupg
+        state: present
+
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker key
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --yes --dearmor -o /etc/apt/keyrings/docker.gpg
+        sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker repository
+      ansible.builtin.shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    - name: Add Kubernetes key
+      ansible.builtin.get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+        mode: '0644'
+        force: true
+
+    - name: Add Kubernetes repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /"
+        state: present
+        update_cache: true
+
+    - name: Update apt and install Docker and Containerd
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: true
+
+    - name: Enable Containerd
+      ansible.builtin.systemd:
+        name: containerd
+        daemon_reload: true
+        state: started
+        enabled: true
+
+    - name: Configure systemd cgroup driver for Containerd
+      ansible.builtin.copy:
+        src: config.toml
+        dest: /etc/containerd/config.toml
+
+    - name: Restart Containerd
+      ansible.builtin.systemd:
+        state: restarted
+        daemon_reload: true
+        name: containerd
+
+    - name: Install Kubernetes
+      ansible.builtin.apt:
+        pkg:
+          - kubeadm
+          - kubelet
+          - kubectl
+
+- name: Master Node
+  hosts: master
+  become: true
+  tasks:
+    - name: Create kubeadm config file
+      ansible.builtin.shell: |
+        cat <<EOF | sudo -E tee kubeadm.config
+        ---
+        apiVersion: kubeadm.k8s.io/v1beta3
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            cloud-provider: external
+        clusterName: bry-teste
+        controlPlaneEndpoint: {{ ansible_host }}:6443
+        controllerManager:
+          extraArgs:
+            cloud-provider: external
+        networking:
+          podSubnet: 10.244.0.0/16
+        ---
+        apiVersion: kubeadm.k8s.io/v1beta3
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            cloud-provider: external
+        EOF
+      args:
+        creates: kubeadm.config
+
+    - name: Initialize kubeadm
+      ansible.builtin.shell: sudo kubeadm init --config=kubeadm.config > /home/ubuntu/cluster_initialized.log
+      args:
+        creates: /home/ubuntu/cluster_initialized.log
+
+    - name: Copy kubeconfig
+      ansible.builtin.shell: |
+        mkdir -p $HOME/.kube
+        sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+        sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+    - name: Install Weavenet
+      ansible.builtin.shell: kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
+
+    - name: Generate kubeadm token 
+      ansible.builtin.shell: sudo kubeadm token create --print-join-command
+      register: kubeadm_token
+      delegate_to: master
+
+    - name: Fetch kubeconfig
+      ansible.builtin.fetch:
+        src: $HOME/.kube/config
+        dest: config
+        flat: true
+
+- name: Worker Nodes
+  hosts: workers
+  become: true
+  tasks:
+    - name: Join command
+      ansible.builtin.set_fact:
+        join: "{{ hostvars['master'].kubeadm_token.stdout_lines[0] }}"
+
+    - name: Add workers to the cluster
+      ansible.builtin.shell: "sudo {{ join }} > /home/ubuntu/worker_initialized.log"
+      args:
+        creates: /home/ubuntu/worker_initialized.log

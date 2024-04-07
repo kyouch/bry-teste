@@ -1,0 +1,91 @@
+name: Terraform + Ansible = Kubernetes Cluster on AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./infrastructure/terraform
+    env:
+      TF_VAR_key_public: ${{ secrets.SSH_PUBLIC_KEY }}
+    steps:
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform Format
+      run: terraform fmt
+
+    - name: Terraform Initialize
+      run: terraform init
+        
+    - name: Terraform Validate
+      run: terraform validate
+
+    - name: Terraform Plan
+      run: terraform plan
+
+    - name: Terraform Apply
+      run: terraform apply -auto-approve -input=false
+
+  ansible:
+    needs: terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./infrastructure/ansible
+    steps:
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Install Ansible Collection for Terraform
+      run: ansible-galaxy collection install cloud.terraform    
+
+    - name: Copy SSH Private Key to Ansible
+      run: |
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > id_ed25519  
+        chmod 400 id_ed25519
+
+    - name: Terraform Initialize
+      run: terraform init
+      working-directory: ./infrastructure/terraform
+
+    - name: Run Playbook
+      run: ansible-playbook -i inventory.yml playbook.yml
+
+    - name: Read Kube Config
+      id: kubeconfig
+      uses: juliangruber/read-file-action@v1
+      with:
+        path: ./infrastructure/ansible/config
+
+    - name: Save Kube Config as Secret
+      uses: gliech/create-github-secret-action@v1
+      with:
+        name: KUBECONFIG
+        value: ${{ steps.kubeconfig.outputs.content }}
+        pa_token: ${{ secrets.PA_TOKEN }}
