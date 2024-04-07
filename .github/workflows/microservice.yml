@@ -10,9 +10,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./microservice/whoami
     steps:
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -27,6 +24,6 @@ jobs:
     - name: Helm Deploy
       uses: WyriHaximus/github-action-helm3@v3
       with:
-        exec: helm upgrade whoami --install --wait --atomic .
+        exec: helm upgrade whoami --install --wait --atomic ./microservice/whoami/
         kubeconfig: '${{ secrets.KUBECONFIG }}'
         overrule_existing_kubeconfig: "true"
