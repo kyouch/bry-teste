@@ -24,6 +24,6 @@ jobs:
     - name: Helm Deploy
       uses: WyriHaximus/github-action-helm3@v3
       with:
-        exec: helm upgrade whoami --install --wait --atomic ./microservice/whoami/
+        exec: helm upgrade whoami --install ./microservice/whoami/
         kubeconfig: '${{ secrets.KUBECONFIG }}'
         overrule_existing_kubeconfig: "true"
