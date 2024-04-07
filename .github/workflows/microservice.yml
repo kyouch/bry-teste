@@ -2,9 +2,11 @@ name: Helm = Simple Microservice
 
 on:
   workflow_run:
-    workflows: ["Terraform + Ansible = Kubernetes Cluster on AWS EC2"]
-    types:
-      - completed
+    push:
+      paths:
+        - microservice/**
+      branches:
+        - main
 
 jobs:
   deploy:

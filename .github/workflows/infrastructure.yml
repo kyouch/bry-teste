@@ -2,6 +2,8 @@ name: Terraform + Ansible = Kubernetes Cluster on AWS EC2
 
 on:
   push:
+    paths:
+      - infrastructure/**
     branches:
       - main
 
